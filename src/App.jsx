@@ -68,6 +68,64 @@ export default function App() {
     });
   };
 
+  // LSB extraction for decoding
+  const extractLSB = (imageData) => {
+    return new Promise((resolve, reject) => {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      const img = new Image();
+      
+      img.onload = () => {
+        try {
+          canvas.width = img.width;
+          canvas.height = img.height;
+          ctx.drawImage(img, 0, 0);
+          const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const pixels = imgData.data;
+          
+          // Extract header (24 bits for message length)
+          let header = '';
+          for (let i = 0; i < 24; i++) {
+            const pixelIndex = Math.floor(i / 3) * 4 + (i % 3);
+            header += (pixels[pixelIndex] & 1).toString();
+          }
+          
+          const messageLength = parseInt(header, 2);
+          
+          if (messageLength <= 0 || messageLength > pixels.length * 3) {
+            reject(new Error('No valid encoded message found'));
+            return;
+          }
+          
+          // Extract message bits
+          let binaryData = '';
+          for (let i = 24; i < 24 + messageLength; i++) {
+            const pixelIndex = Math.floor(i / 3) * 4 + (i % 3);
+            if (pixelIndex < pixels.length) {
+              binaryData += (pixels[pixelIndex] & 1).toString();
+            }
+          }
+          
+          // Convert binary to text
+          let text = '';
+          for (let i = 0; i < binaryData.length; i += 8) {
+            const byte = binaryData.substr(i, 8);
+            if (byte.length === 8) {
+              text += String.fromCharCode(parseInt(byte, 2));
+            }
+          }
+          
+          resolve(text);
+        } catch (error) {
+          reject(error);
+        }
+      };
+      
+      img.onerror = () => reject(new Error('Failed to load image'));
+      img.src = imageData;
+    });
+  };
+
   const handleEncodeImageUpload = (e) => {
     const file = e.target.files[0];
     if (file) {
@@ -136,16 +194,22 @@ export default function App() {
     }
   };
 
-  const simulateDecode = () => {
+  const performDecode = async () => {
     if (!decodeImage) {
       alert('Please upload an encoded image');
       return;
     }
     setLoading(true);
-    setTimeout(() => {
-      setDecodedText('Demo: In full version, this extracts your hidden message!');
+    try {
+      const extractedText = await extractLSB(decodePreview);
+      setDecodedText(extractedText);
       setLoading(false);
-    }, 1500);
+      alert('✓ Message decoded successfully!');
+    } catch (error) {
+      setLoading(false);
+      setDecodedText('');
+      alert('Error: ' + error.message + '\n\nMake sure this image was encoded with this tool.');
+    }
   };
 
   return (
@@ -373,7 +437,7 @@ export default function App() {
               </div>
 
               <button
-                onClick={simulateDecode}
+                onClick={performDecode}
                 disabled={loading}
                 className="w-full py-4 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-xl font-semibold shadow-lg hover:shadow-purple-500/70 transition-all disabled:opacity-50 flex items-center justify-center space-x-2"
               >
