@@ -22,6 +22,21 @@ export default function App() {
     return { compressed: binaryData, originalBits, compressedBits };
   };
 
+  // Generate positions from seed
+  const generatePositions = (seed, count, max) => {
+    let rng = seed;
+    const available = Array.from({length: max}, (_, i) => i);
+    
+    // Fisher-Yates shuffle with seeded random
+    for (let i = available.length - 1; i > 0; i--) {
+      rng = (rng * 1103515245 + 12345) & 0x7fffffff;
+      const j = rng % (i + 1);
+      [available[i], available[j]] = [available[j], available[i]];
+    }
+    
+    return available.slice(0, count);
+  };
+
   // LSB embedding
   const embedLSB = (imageData, binaryData, randomize = false) => {
     return new Promise((resolve) => {
@@ -37,27 +52,36 @@ export default function App() {
         const pixels = imgData.data;
         
         const dataLength = binaryData.length;
-        const header = dataLength.toString(2).padStart(24, '0');
-        const fullData = header + binaryData;
+        const seed = randomize ? Math.floor(Math.random() * 2147483647) : 0;
         
+        // Header stored sequentially: 1 bit (random flag) + 31 bits (seed) + 24 bits (length) = 56 bits
+        const randomFlag = randomize ? '1' : '0';
+        const header = randomFlag + seed.toString(2).padStart(31, '0') + dataLength.toString(2).padStart(24, '0');
+        
+        // Store header in first 56 positions (sequential)
+        for (let i = 0; i < header.length; i++) {
+          const pixelIndex = Math.floor(i / 3) * 4 + (i % 3);
+          if (pixelIndex < pixels.length) {
+            pixels[pixelIndex] = (pixels[pixelIndex] & 0xFE) | parseInt(header[i]);
+          }
+        }
+        
+        // Store message data
         let positions = [];
         if (randomize) {
           const totalPixels = Math.floor(pixels.length / 4);
-          const availablePositions = Array.from({length: totalPixels * 3}, (_, i) => i);
-          for (let i = availablePositions.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [availablePositions[i], availablePositions[j]] = [availablePositions[j], availablePositions[i]];
-          }
-          positions = availablePositions.slice(0, fullData.length);
+          // Generate random positions starting after header
+          const availableMax = totalPixels * 3 - 56;
+          positions = generatePositions(seed, binaryData.length, availableMax).map(p => p + 56);
         } else {
-          positions = Array.from({length: fullData.length}, (_, i) => i);
+          positions = Array.from({length: binaryData.length}, (_, i) => i + 56);
         }
         
-        for (let i = 0; i < fullData.length && i < positions.length; i++) {
+        for (let i = 0; i < binaryData.length && i < positions.length; i++) {
           const pos = positions[i];
           const pixelIndex = Math.floor(pos / 3) * 4 + (pos % 3);
           if (pixelIndex < pixels.length) {
-            pixels[pixelIndex] = (pixels[pixelIndex] & 0xFE) | parseInt(fullData[i]);
+            pixels[pixelIndex] = (pixels[pixelIndex] & 0xFE) | parseInt(binaryData[i]);
           }
         }
         
@@ -83,24 +107,37 @@ export default function App() {
           const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
           const pixels = imgData.data;
           
-          // Extract header (24 bits for message length)
-          let header = '';
-          for (let i = 0; i < 24; i++) {
+          // Extract header from first 56 sequential positions
+          let headerBits = '';
+          for (let i = 0; i < 56; i++) {
             const pixelIndex = Math.floor(i / 3) * 4 + (i % 3);
-            header += (pixels[pixelIndex] & 1).toString();
+            headerBits += (pixels[pixelIndex] & 1).toString();
           }
           
-          const messageLength = parseInt(header, 2);
+          const isRandom = headerBits[0] === '1';
+          const seed = parseInt(headerBits.substr(1, 31), 2);
+          const messageLength = parseInt(headerBits.substr(32, 24), 2);
           
           if (messageLength <= 0 || messageLength > pixels.length * 3) {
             reject(new Error('No valid encoded message found'));
             return;
           }
           
+          // Generate positions for message data
+          let positions = [];
+          if (isRandom) {
+            const totalPixels = Math.floor(pixels.length / 4);
+            const availableMax = totalPixels * 3 - 56;
+            positions = generatePositions(seed, messageLength, availableMax).map(p => p + 56);
+          } else {
+            positions = Array.from({length: messageLength}, (_, i) => i + 56);
+          }
+          
           // Extract message bits
           let binaryData = '';
-          for (let i = 24; i < 24 + messageLength; i++) {
-            const pixelIndex = Math.floor(i / 3) * 4 + (i % 3);
+          for (let i = 0; i < positions.length; i++) {
+            const pos = positions[i];
+            const pixelIndex = Math.floor(pos / 3) * 4 + (pos % 3);
             if (pixelIndex < pixels.length) {
               binaryData += (pixels[pixelIndex] & 1).toString();
             }
